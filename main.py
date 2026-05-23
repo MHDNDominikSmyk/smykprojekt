@@ -1,98 +1,61 @@
 import pandas as pd
-import numpy as np
-from datetime import datetime
-import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Ignorujemy ostrzeżenia o parsowaniu dat dla czystości konsoli
-warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
+df1 = pd.read_csv('Online_Retail.csv', encoding='ISO-8859-1', on_bad_lines='skip', engine='python')
+df2 = pd.read_csv('Online_Retail_II.csv', encoding='ISO-8859-1', on_bad_lines='skip', engine='python')
+df = pd.concat([df1, df2], ignore_index=True)
 
-# --- PRZYGOTOWANIE DANYCH (Czyszczenie) ---
-df = pd.read_csv('Online_Retail.csv', encoding='ISO-8859-1')
 df = df.dropna(subset=['CustomerID'])
-df = df[~df['InvoiceNo'].astype(str).str.startswith('C')]
-df = df[(df['Quantity'] > 0) & (df['UnitPrice'] > 0)]
+df = df[df['Quantity'] > 0]
+df['TotalPrice'] = df['Quantity'] * df['UnitPrice']
 
-# Użycie format='mixed' eliminuje błąd inferencji formatu daty
-df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'], format='mixed')
+df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
+df['Year'] = df['InvoiceDate'].dt.year
+df['Month'] = df['InvoiceDate'].dt.month
 
-df = df.drop_duplicates()
-df['Revenue'] = df['Quantity'] * df['UnitPrice']
+rollup_df = df.groupby('Year')['TotalPrice'].sum()
+drilldown_df = df.groupby(['Year', 'Month'])['TotalPrice'].sum()
+slice_df = df[df['Country'] == 'United Kingdom']
+dice_df = df[(df['Country'] == 'United Kingdom') & (df['Year'] == 2011)]
+pivot_cube = pd.pivot_table(df, values='TotalPrice', index='Country', columns='Year', aggfunc='sum', fill_value=0)
 
-print("--- WYNIKI LABORATORIUM 3 ---")
+print("Zadanie 1: Top 10 krajów pod względem sprzedaży")
+top_10_countries = df.groupby('Country')['TotalPrice'].sum().nlargest(10)
+print(top_10_countries)
+print("\n")
 
-# --- Zad1.1 ---
-print("\nZad1.1: Ziarno faktu (grain)")
-print("Ziarno: Pojedyncza pozycja na fakturze (InvoiceNo + StockCode).")
-print("Opis: Jeden wiersz reprezentuje sprzedaż konkretnego produktu w ramach pojedynczej transakcji.")
-print("Uzasadnienie: Wybór najbardziej szczegółowego ziarna pozwala na maksymalną elastyczność agregacji danych.")
+print("Zadanie 2: Znajdź miesiąc o największej sprzedaży")
+best_month = df.groupby('Month')['TotalPrice'].sum().idxmax()
+best_month_value = df.groupby('Month')['TotalPrice'].sum().max()
+print(f"Najlepszy miesiąc: {best_month}, Sprzedaż: {best_month_value:.2f}")
+print("\n")
 
-# --- Zad1.2 ---
-print("\nZad1.2: Wybór ziarna")
-print("Wybrano ziarno: 1 (Pojedyncza pozycja faktury)")
+print("Zadanie 3: Kostka - wiersze: kraj, kolumny: miesiąc, wartości: sprzedaż")
+cube_task3 = pd.pivot_table(df, values='TotalPrice', index='Country', columns='Month', aggfunc='sum', fill_value=0)
+print(cube_task3.head())
+print("\n")
 
-# --- Zad1.3 ---
-print("\nZad1.3: Uzasadnienie i analiza")
-print("Uzasadnienie: Pozwala to na analizę asortymentową i koszykową (co z czym jest kupowane).")
-print("Przykład analizy: Zidentyfikowanie top 10 produktów generujących największy przychód.")
+print("Zadanie 4: Dla każdego kraju znajdź rok z najwyższą sprzedażą")
+country_year_sales = df.groupby(['Country', 'Year'])['TotalPrice'].sum().reset_index()
+idx_best_years = country_year_sales.groupby('Country')['TotalPrice'].idxmax()
+best_year_per_country = country_year_sales.loc[idx_best_years]
+print(best_year_per_country.head(10))
+print("\n")
 
-# --- Zad1.4 ---
-print("\nZad1.4: Pytania biznesowe")
-print("Pytania: 'Który produkt jest najczęściej kupowany?', 'Jakie produkty wybierają klienci z danego kraju?'.")
-print("Analiza: Śledzenie trendów sprzedaży konkretnych produktów (StockCode) w czasie.")
+print("Zadanie 5 (challenge): Top 5 produktów w każdym kraju")
+product_sales = df.groupby(['Country', 'StockCode'])['TotalPrice'].sum().reset_index()
+product_sales = product_sales.sort_values(by=['Country', 'TotalPrice'], ascending=[True, False])
+top_5_products_per_country = product_sales.groupby('Country').head(5)
+print(top_5_products_per_country.head(15))
+print("\n")
 
-# --- Zad1.5: Implementacja Kluczy ---
-# Tworzenie DimProduct
-dim_product = df[['StockCode', 'Description']].drop_duplicates(subset=['StockCode']).copy()
-dim_product['ProductKey'] = range(1, len(dim_product) + 1)
-
-# Tworzenie DimDate
-dim_date = pd.DataFrame({'FullDate': pd.to_datetime(df['InvoiceDate'].dt.date.unique())})
-dim_date['DateKey'] = dim_date['FullDate'].dt.strftime('%Y%m%d').astype(int)
-dim_date['Year'] = dim_date['FullDate'].dt.year
-dim_date['Month'] = dim_date['FullDate'].dt.month
-dim_date['Day'] = dim_date['FullDate'].dt.day
-
-print("\nZad1.5: Klucze")
-print("Zidentyfikowano klucze naturalne (CustomerID, StockCode) i wygenerowano klucze sztuczne (CustomerKey, ProductKey, DateKey).")
-
-# --- Zad1.6: SCD Typ 1 ---
-dim_customer = df[['CustomerID', 'Country']].drop_duplicates(subset=['CustomerID']).copy()
-dim_customer['CustomerKey'] = range(1, len(dim_customer) + 1)
-
-fact_sales = df.merge(dim_product[['StockCode', 'ProductKey']], on='StockCode', how='left')
-fact_sales = fact_sales.merge(dim_customer[['CustomerID', 'CustomerKey']], on='CustomerID', how='left')
-fact_sales['DateKey'] = fact_sales['InvoiceDate'].dt.strftime('%Y%m%d').astype(int)
-
-print("\nZad1.6: SCD Typ 1")
-print("Zaimplementowano SCD typu 1 dla DimCustomer (aktualizacja danych bez zachowania historii).")
-
-# --- Zad2.1: Rozszerzenie modelu ---
-dim_invoice = df[['InvoiceNo']].drop_duplicates().copy()
-dim_invoice['InvoiceKey'] = range(1, len(dim_invoice) + 1)
-
-fact_sales_ext = fact_sales.merge(dim_invoice, on='InvoiceNo', how='left')
-fact_sales_ext = fact_sales_ext[['ProductKey', 'CustomerKey', 'DateKey', 'InvoiceKey', 'Quantity', 'Revenue', 'UnitPrice']]
-
-print("\nZad2.1: Nowy wymiar i miary")
-print("Dodano wymiar DimInvoice oraz miarę UnitPrice do tabeli faktów.")
-print("Analiza: Zastosowano denormalizację wymiarów (schemat gwiazdy) dla zwiększenia wydajności odczytu.")
-
-# --- Zad2.2: SCD Typ 2 ---
-dim_customer_scd2 = df[['CustomerID', 'Country']].drop_duplicates().copy()
-dim_customer_scd2['ValidFrom'] = pd.Timestamp('2010-01-01')
-dim_customer_scd2['ValidTo'] = pd.Timestamp('2099-12-31')
-dim_customer_scd2['IsCurrent'] = True
-dim_customer_scd2['CustomerKey_SCD2'] = range(1, len(dim_customer_scd2) + 1)
-
-print("\nZad2.2: SCD Typ 2")
-print("Zaimplementowano wersjonowanie (SCD2) dla klientów z polami ValidFrom, ValidTo i IsCurrent.")
-
-# --- Zad2.3: Podsumowanie projektu ---
-print("\nZad2.3: Analiza projektu")
-print("1. Ziarno: Wybrano pozycję faktury, aby umożliwić analizę na najniższym poziomie szczegółowości.")
-print("2. Kompromisy: Wybrano schemat gwiazdy (redundancja danych) zamiast śnieżynki, aby przyspieszyć zapytania SQL.")
-print("3. Biznes: Model wspiera analizy trendów, rentowności produktów oraz segmentację geograficzną klientów.")
-
-# Eksport do plików
-fact_sales_ext.to_csv('FactSales.csv', index=False)
-dim_customer_scd2.to_csv('DimCustomer_SCD2.csv', index=False)
+print("Bonus: Wizualizacja (heatmap)")
+cube_for_heatmap = cube_task3.drop('United Kingdom', errors='ignore')
+plt.figure(figsize=(14, 10))
+sns.heatmap(cube_for_heatmap, cmap='viridis', annot=False, fmt=".0f")
+plt.title('Heatmapa Sprzedaży: Kraj vs Miesiąc (bez UK)')
+plt.xlabel('Miesiąc')
+plt.ylabel('Kraj')
+plt.tight_layout()
+plt.show()
